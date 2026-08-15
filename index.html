@@ -99,7 +99,8 @@
 <script>
 const LS_BACKEND = 'ce_backend_url';
 const LS_SESSION = 'ce_session';
-let backendUrl = localStorage.getItem(LS_BACKEND) || '';
+const DEFAULT_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbwLi9fLo-bnCRYXElVsM8CAaup4wvzR69esmTmjiW_ptvN_Cat-7kWmzmxjI_KYTEsavg/exec';
+let backendUrl = localStorage.getItem(LS_BACKEND) || DEFAULT_BACKEND_URL;
 let currentUser = null;
 let pendingRole = null;
 let allQuestions = { student: [], teacher: [] };
@@ -595,7 +596,10 @@ function filterUsers(){
   });
 }
 
+let editingQuestionId = null;
+
 function renderQuestionEditor(role){
+  editingQuestionId = null;
   const qs = allQuestions[role] || [];
   const view = document.getElementById('admin-view');
   view.innerHTML = `
@@ -608,11 +612,14 @@ function renderQuestionEditor(role){
                 <div>${esc(q.label)} ${q.required?'<span class="req">*</span>':''}</div>
                 <div class="meta">${q.type}${q.options ? ' · '+esc(q.options) : ''}</div>
               </div>
-              <button class="btn-ghost btn-danger" onclick="removeQuestion('${role}','${q.id}')">Remove</button>
+              <div style="display:flex;gap:8px;flex-shrink:0;">
+                <button class="btn-ghost" onclick="editQuestion('${role}','${q.id}')">Edit</button>
+                <button class="btn-ghost btn-danger" onclick="removeQuestion('${role}','${q.id}')">Remove</button>
+              </div>
             </div>`).join('')}
       </div>
       <div class="field" style="margin-top:18px;">
-        <label>New question label</label>
+        <label id="nq-label-caption">New question label</label>
         <input type="text" id="nq-label" placeholder="e.g. Roll no, Attendance ID, Project topic">
       </div>
       <div class="row2">
@@ -644,11 +651,35 @@ function renderQuestionEditor(role){
         <label>Options (comma-separated)</label>
         <input type="text" id="nq-options" placeholder="e.g. First,Second,Third">
       </div>
-      <button class="btn" onclick="addQuestion('${role}')">Add question</button>
+      <div style="display:flex;gap:10px;">
+        <button class="btn" id="nq-submit-btn" onclick="addQuestion('${role}')">Add question</button>
+        <button class="btn-ghost" id="nq-cancel-btn" onclick="cancelEditQuestion('${role}')" style="display:none;width:auto;">Cancel</button>
+      </div>
       <div class="status" id="q-status"></div>
       <div class="hint">"Attach file" stores the file inside the Google Sheet as text — keep attachments small (a photo or scan under ~500 KB works well; large files may fail to save).</div>
     </div>
   `;
+}
+
+function editQuestion(role, id){
+  const q = (allQuestions[role]||[]).find(x=>x.id===id);
+  if(!q) return;
+  editingQuestionId = id;
+  document.getElementById('nq-label-caption').textContent = 'Edit question label';
+  document.getElementById('nq-label').value = q.label;
+  document.getElementById('nq-type').value = q.type;
+  document.getElementById('nq-required').checked = !!q.required;
+  document.getElementById('nq-options').value = q.options || '';
+  const needsOpts = ['select','radio','mcq','checkbox'].includes(q.type);
+  document.getElementById('nq-options-wrap').style.display = needsOpts ? 'block' : 'none';
+  document.getElementById('nq-submit-btn').textContent = 'Update question';
+  document.getElementById('nq-cancel-btn').style.display = 'block';
+  document.getElementById('nq-label').scrollIntoView({behavior:'smooth', block:'center'});
+  document.getElementById('nq-label').focus();
+}
+
+function cancelEditQuestion(role){
+  renderQuestionEditor(role);
 }
 
 async function addQuestion(role){
@@ -658,10 +689,21 @@ async function addQuestion(role){
   const options = document.getElementById('nq-options').value.trim();
   const status = document.getElementById('q-status');
   if(!label){ status.textContent = 'Enter a question label first.'; return; }
-  const q = { id: 'q'+Date.now().toString(36), label, type, required };
-  if(['select','radio','mcq','checkbox'].includes(type)) q.options = options;
+
   allQuestions[role] = allQuestions[role] || [];
-  allQuestions[role].push(q);
+
+  if(editingQuestionId){
+    const idx = allQuestions[role].findIndex(x=>x.id===editingQuestionId);
+    if(idx===-1){ status.textContent = 'That question no longer exists.'; editingQuestionId=null; return; }
+    const q = { id: editingQuestionId, label, type, required };
+    if(['select','radio','mcq','checkbox'].includes(type)) q.options = options;
+    allQuestions[role][idx] = q;
+  } else {
+    const q = { id: 'q'+Date.now().toString(36), label, type, required };
+    if(['select','radio','mcq','checkbox'].includes(type)) q.options = options;
+    allQuestions[role].push(q);
+  }
+
   status.innerHTML = '<span class="spinner"></span>Saving…';
   try{
     const res = await callBackend('saveQuestions', { role, questions: allQuestions[role] });

@@ -417,6 +417,8 @@ function clearSignature(){
   document.getElementById('sig-err').style.display = 'none';
 }
 
+const MAX_ANSWERS_JSON_CHARS = 42000; // headroom under Google Sheets' 50,000-char single-cell limit
+
 function fileToDataUrl(file){
   return new Promise((resolve, reject)=>{
     const reader = new FileReader();
@@ -424,6 +426,37 @@ function fileToDataUrl(file){
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+}
+
+function compressImageFile(file, maxDim, quality){
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    const reader = new FileReader();
+    reader.onload = () => { img.src = reader.result; };
+    reader.onerror = reject;
+    img.onload = () => {
+      let { width, height } = img;
+      if(width > maxDim || height > maxDim){
+        if(width > height){ height = Math.round(height * (maxDim/width)); width = maxDim; }
+        else { width = Math.round(width * (maxDim/height)); height = maxDim; }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function readAttachedFile(file){
+  if(file.type && file.type.startsWith('image/')){
+    // Downscale + recompress so photos fit inside a single Google Sheets cell.
+    try{ return await compressImageFile(file, 900, 0.6); }
+    catch(e){ return await fileToDataUrl(file); }
+  }
+  return await fileToDataUrl(file);
 }
 
 async function submitAnswers(role){
@@ -439,7 +472,7 @@ async function submitAnswers(role){
       if(q.required && !file){ errEl.style.display='block'; ok=false; continue; }
       errEl.style.display='none';
       if(file){
-        try{ answers[q.label] = await fileToDataUrl(file); }
+        try{ answers[q.label] = await readAttachedFile(file); }
         catch(e){ answers[q.label] = ''; }
       }
     } else if(q.type==='radio' || q.type==='mcq'){
@@ -470,11 +503,17 @@ async function submitAnswers(role){
 
   if(!ok) return;
 
-  const btn = document.getElementById('submit-btn');
-  const status = document.getElementById('submit-status');
-  btn.disabled = true; status.innerHTML = '<span class="spinner"></span>Submitting…';
-
   answers['Signature'] = document.getElementById('sig-pad').toDataURL('image/png');
+
+  const status = document.getElementById('submit-status');
+  const payloadSize = JSON.stringify(answers).length;
+  if(payloadSize > MAX_ANSWERS_JSON_CHARS){
+    status.textContent = 'Your submission is too large to save (attachments + signature combined). Try a smaller photo, a shorter signature, or a lower-resolution scan, then submit again.';
+    return;
+  }
+
+  const btn = document.getElementById('submit-btn');
+  btn.disabled = true; status.innerHTML = '<span class="spinner"></span>Submitting…';
 
   const entry = {
     id: 'E'+Date.now().toString(36).toUpperCase(),
@@ -487,6 +526,7 @@ async function submitAnswers(role){
     if(!res.ok){
       if(res.error === 'ALREADY_SUBMITTED') status.textContent = 'You have already submitted this form — only one entry per person is allowed.';
       else if(res.error === 'CLOSED') status.textContent = 'This form has closed and is no longer accepting entries.';
+      else if(res.error === 'TOO_LARGE') status.textContent = 'Your submission is too large to save. Try a smaller photo or a simpler signature, then submit again.';
       else status.textContent = res.error || 'Could not save your entry.';
       btn.disabled = false;
       return;
@@ -656,7 +696,7 @@ function renderQuestionEditor(role){
         <button class="btn-ghost" id="nq-cancel-btn" onclick="cancelEditQuestion('${role}')" style="display:none;width:auto;">Cancel</button>
       </div>
       <div class="status" id="q-status"></div>
-      <div class="hint">"Attach file" stores the file inside the Google Sheet as text — keep attachments small (a photo or scan under ~500 KB works well; large files may fail to save).</div>
+      <div class="hint">"Attach file" stores the file inside one Google Sheet cell as text, which has a strict ~45,000-character limit shared with the signature and every other answer combined. Photos are automatically resized and compressed on submission — most photos work fine. Non-image files (PDFs, docs) aren't compressed, so keep those under roughly 20 KB, or they may be rejected with a clear "too large" message.</div>
     </div>
   `;
 }

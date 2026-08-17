@@ -1,3 +1,13 @@
+function doGet(e) {
+  var payload = {
+    ok: true,
+    message: 'CE Dept backend is live and reachable.',
+    deployedActions: ['login','getQuestions','saveQuestions','addSubmission','getSubmissions','changePassword','getUsers','getSettings','saveSettings','hasSubmitted','deleteAllSubmissions','startNewForm'],
+    checkedAt: new Date().toISOString()
+  };
+  return ContentService.createTextOutput(JSON.stringify(payload, null, 2)).setMimeType(ContentService.MimeType.JSON);
+}
+
 function doPost(e) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var body = JSON.parse(e.postData.contents);
@@ -118,6 +128,10 @@ function addSubmission(ss, p) {
       return { ok:false, error:'CLOSED' };
     }
   }
+  var answersJson = JSON.stringify(p.answers);
+  if (answersJson.length > 45000) {
+    return { ok:false, error:'TOO_LARGE' };
+  }
   var version = getFormVersion(ss);
   var sh = getSubmissionsSheet(ss);
   var data = sh.getDataRange().getValues();
@@ -126,7 +140,7 @@ function addSubmission(ss, p) {
       return { ok:false, error:'ALREADY_SUBMITTED' };
     }
   }
-  sh.appendRow([p.id, p.time, p.role, p.mobile, p.name, JSON.stringify(p.answers), version]);
+  sh.appendRow([p.id, p.time, p.role, p.mobile, p.name, answersJson, version]);
   return { ok:true };
 }
 
